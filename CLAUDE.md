@@ -21,7 +21,9 @@ npm run typecheck  # tsc --noEmit
 
 1. User uploads image → resampled to ≤600px longest side via `loadImage`
 2. User picks color count (1/2/3) + hex per plate in `ColorPanel`
-3. User paints per-color binary masks in `PaintCanvas` (or 1-color auto-mask from luminance)
+3. User assigns regions to colors in `PaintCanvas`:
+   - Default tool is `region`: image is posterized into N levels via `buildRegionMap`, connected components are labelled, clicking a region copies its pixels into the active color's mask. Boundaries are drawn as a black overlay.
+   - `brush` / `eraser` / `fill` tools are available for manual painting / region correction.
 4. On mask change or param change, masks + `TraceParams` go to `tracePipeline.worker.ts`
 5. Worker: per-mask `traceContours` → `simplifyPath` → `jaggify` → assembles `SvgDoc` with engrave + cut layers per color
 6. `SvgPreview` renders inline; `ExportButton` serialises to mm-unit SVG with layer groups

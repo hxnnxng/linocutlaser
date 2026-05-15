@@ -7,12 +7,15 @@ type Props = {
   activeColorId: ColorId;
   tool: PaintTool;
   brushSizePx: number;
+  posterizeLevels: number;
   canUndo: boolean;
+  hasImage: boolean;
   onColorCountChange: (n: 1 | 2 | 3) => void;
   onActiveColorChange: (id: ColorId) => void;
   onPrintColorChange: (id: ColorId, hex: string) => void;
   onToolChange: (t: PaintTool) => void;
   onBrushSizeChange: (px: number) => void;
+  onPosterizeLevelsChange: (n: number) => void;
   onClearMask: (id: ColorId) => void;
   onUndo: () => void;
 };
@@ -25,12 +28,15 @@ export function ColorPanel({
   activeColorId,
   tool,
   brushSizePx,
+  posterizeLevels,
   canUndo,
+  hasImage,
   onColorCountChange,
   onActiveColorChange,
   onPrintColorChange,
   onToolChange,
   onBrushSizeChange,
+  onPosterizeLevelsChange,
   onClearMask,
   onUndo,
 }: Props) {
@@ -89,7 +95,15 @@ export function ColorPanel({
       </Section>
 
       <Section title="Værktøj">
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => onToolChange('region')}
+            disabled={!hasImage}
+            style={pillStyle(tool === 'region', !hasImage)}
+            title="Klik på et område for at tildele det den aktive farve"
+          >
+            Region
+          </button>
           <button onClick={() => onToolChange('brush')} style={pillStyle(tool === 'brush')}>
             Pensel
           </button>
@@ -100,18 +114,36 @@ export function ColorPanel({
             Fyld
           </button>
         </div>
-        <label style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          Penselstørrelse: {brushSizePx}px
-          <input
-            type="range"
-            min={2}
-            max={120}
-            step={1}
-            value={brushSizePx}
-            onChange={(e) => onBrushSizeChange(Number(e.target.value))}
-            style={{ width: '100%' }}
-          />
-        </label>
+        {tool === 'region' ? (
+          <label style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+            Niveauer i region-opdeling: {posterizeLevels}
+            <input
+              type="range"
+              min={2}
+              max={8}
+              step={1}
+              value={posterizeLevels}
+              onChange={(e) => onPosterizeLevelsChange(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+            <span style={{ fontSize: 11, color: '#666' }}>
+              Flere niveauer = flere, mindre regioner.
+            </span>
+          </label>
+        ) : (
+          <label style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+            Penselstørrelse: {brushSizePx}px
+            <input
+              type="range"
+              min={2}
+              max={120}
+              step={1}
+              value={brushSizePx}
+              onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </label>
+        )}
       </Section>
 
       <button onClick={onUndo} disabled={!canUndo} style={fullButtonStyle(canUndo)}>
@@ -132,16 +164,17 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function pillStyle(active: boolean): React.CSSProperties {
+function pillStyle(active: boolean, disabled = false): React.CSSProperties {
+  const dim = disabled && !active;
   return {
     flex: 1,
     padding: '6px 10px',
     border: `1px solid ${active ? '#0a84ff' : '#ccc'}`,
-    background: active ? '#0a84ff' : '#fff',
-    color: active ? '#fff' : '#222',
+    background: active ? '#0a84ff' : dim ? '#f5f5f5' : '#fff',
+    color: active ? '#fff' : dim ? '#999' : '#222',
     borderRadius: 6,
     fontSize: 13,
-    cursor: 'pointer',
+    cursor: disabled ? 'not-allowed' : 'pointer',
   };
 }
 

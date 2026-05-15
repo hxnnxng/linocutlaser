@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { buildRegionMap, type RegionMap } from './utils/regions';
 import { ImageDrop } from './components/ImageDrop';
 import { PaintCanvas, type PaintTool } from './components/PaintCanvas';
 import { ColorPanel } from './components/ColorPanel';
@@ -8,7 +9,6 @@ import { LayerToggles, DEFAULT_VISIBILITY, type LayerVisibility } from './compon
 import { ExportButton } from './components/ExportButton';
 import type { ColorId, ColorPlate, MaskDims, PaperMm, TraceParams } from './types';
 import { loadImage, type LoadedImage } from './utils/loadImage';
-import { autoMaskFromLuminance } from './utils/autoMask';
 import { usePipeline } from './hooks/usePipeline';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 
@@ -42,8 +42,9 @@ export function App() {
   const [colorCount, setColorCount] = useState<1 | 2 | 3>(1);
   const [plates, setPlates] = useState<ColorPlate[]>(() => buildInitialPlates(1, null, []));
   const [activeColorId, setActiveColorId] = useState<ColorId>('c1');
-  const [tool, setTool] = useState<PaintTool>('brush');
+  const [tool, setTool] = useState<PaintTool>('region');
   const [brushSizePx, setBrushSizePx] = useState(40);
+  const [posterizeLevels, setPosterizeLevels] = useState(4);
   const [paper, setPaper] = useState<PaperMm>(DEFAULT_PAPER);
   const [params, setParams] = useState<TraceParams>(DEFAULT_PARAMS);
   const [visibility, setVisibility] = useState<LayerVisibility>(DEFAULT_VISIBILITY);
@@ -54,6 +55,11 @@ export function App() {
   const debouncedPaper = useDebouncedValue(paper, 250);
 
   const { doc, busy } = usePipeline(debouncedPlates, image?.dims ?? null, debouncedPaper, debouncedParams);
+
+  const regionMap: RegionMap | null = useMemo(() => {
+    if (!image) return null;
+    return buildRegionMap(image.luminance, image.dims, posterizeLevels);
+  }, [image, posterizeLevels]);
 
   const handleFile = useCallback(async (file: File) => {
     const loaded: LoadedImage = await loadImage(file);
@@ -152,12 +158,15 @@ export function App() {
             activeColorId={activeColorId}
             tool={tool}
             brushSizePx={brushSizePx}
+            posterizeLevels={posterizeLevels}
             canUndo={undoStack.length > 0}
+            hasImage={!!image}
             onColorCountChange={handleColorCountChange}
             onActiveColorChange={setActiveColorId}
             onPrintColorChange={handlePrintColorChange}
             onToolChange={setTool}
             onBrushSizeChange={setBrushSizePx}
+            onPosterizeLevelsChange={setPosterizeLevels}
             onClearMask={handleClearMask}
             onUndo={handleUndo}
           />
@@ -173,6 +182,7 @@ export function App() {
             activeColorId={activeColorId}
             brushSizePx={brushSizePx}
             tool={tool}
+            regionMap={regionMap}
             onStrokeBegin={handleStrokeBegin}
             onStrokeEnd={handleStrokeEnd}
           />
@@ -208,15 +218,12 @@ function buildInitialPlates(
   const prevById = new Map(prev.map((p) => [p.id, p]));
   const w = image?.dims.w ?? 0;
   const h = image?.dims.h ?? 0;
-  return ids.map((id, idx) => {
+  return ids.map((id) => {
     const existing = prevById.get(id);
     const printColor = existing?.printColor ?? DEFAULT_PALETTE[id];
     if (!image) return { id, printColor, mask: new Uint8Array(0) };
     if (existing && existing.mask.length === w * h) {
       return { id, printColor, mask: existing.mask };
-    }
-    if (idx === 0 && count === 1) {
-      return { id, printColor, mask: autoMaskFromLuminance(image.luminance, image.dims) };
     }
     return { id, printColor, mask: new Uint8Array(w * h) };
   });

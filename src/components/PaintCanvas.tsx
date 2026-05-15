@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react';
 import type { ColorId, ColorPlate, MaskDims } from '../types';
+import { paintRegionBoundaries, regionAt, type RegionMap } from '../utils/regions';
 
-export type PaintTool = 'brush' | 'eraser' | 'fill';
+export type PaintTool = 'brush' | 'eraser' | 'fill' | 'region';
 
 type Props = {
   source: ImageBitmap;
@@ -10,6 +11,7 @@ type Props = {
   activeColorId: ColorId;
   brushSizePx: number;
   tool: PaintTool;
+  regionMap: RegionMap | null;
   onStrokeBegin: () => void;
   onStrokeEnd: (updates: { id: ColorId; mask: Uint8Array }[]) => void;
 };
@@ -25,6 +27,7 @@ export function PaintCanvas({
   activeColorId,
   brushSizePx,
   tool,
+  regionMap,
   onStrokeBegin,
   onStrokeEnd,
 }: Props) {
@@ -33,8 +36,10 @@ export function PaintCanvas({
   const drawingRef = useRef(false);
   const lastPxRef = useRef<{ x: number; y: number } | null>(null);
   const touchedRef = useRef<Set<ColorId>>(new Set());
+  const hoverRegionRef = useRef<number>(-1);
 
   const scaleRef = useRef(1);
+  const regionOverlayRef = useRef<ImageData | null>(null);
 
   useLayoutEffect(() => {
     masksRef.current = new Map(plates.map((p) => [p.id, new Uint8Array(p.mask)]));
@@ -44,6 +49,18 @@ export function PaintCanvas({
   useEffect(() => {
     redraw();
   }, [source]);
+
+  useEffect(() => {
+    if (!regionMap) {
+      regionOverlayRef.current = null;
+      redraw();
+      return;
+    }
+    const overlay = new ImageData(dims.w, dims.h);
+    paintRegionBoundaries(regionMap, overlay.data);
+    regionOverlayRef.current = overlay;
+    redraw();
+  }, [regionMap, dims]);
 
   function setupCanvasSize() {
     const canvas = canvasRef.current;
@@ -84,6 +101,35 @@ export function PaintCanvas({
         data[di + 3] = 255;
       }
     }
+
+    if (regionOverlayRef.current && (tool === 'region' || tool === 'fill')) {
+      const ov = regionOverlayRef.current.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const oa = ov[i + 3];
+        if (oa === 0) continue;
+        const alpha = oa / 255;
+        data[i] = blend(data[i], ov[i], alpha);
+        data[i + 1] = blend(data[i + 1], ov[i + 1], alpha);
+        data[i + 2] = blend(data[i + 2], ov[i + 2], alpha);
+        data[i + 3] = 255;
+      }
+    }
+
+    if (tool === 'region' && regionMap && hoverRegionRef.current >= 0) {
+      const ids = regionMap.regionIds;
+      const target = hoverRegionRef.current;
+      const activePlate = plates.find((p) => p.id === activeColorId);
+      const [hr, hg, hb] = activePlate ? hexToRgb(activePlate.printColor) : [120, 200, 255];
+      for (let i = 0; i < ids.length; i++) {
+        if (ids[i] !== target) continue;
+        const di = i * 4;
+        data[di] = blend(data[di], hr, 0.35);
+        data[di + 1] = blend(data[di + 1], hg, 0.35);
+        data[di + 2] = blend(data[di + 2], hb, 0.35);
+        data[di + 3] = 255;
+      }
+    }
+
     ctx.putImageData(overlay, 0, 0);
   }
 
@@ -222,6 +268,24 @@ export function PaintCanvas({
     }
   }
 
+  function assignRegion(rid: number) {
+    if (!regionMap || rid < 0) return;
+    const active = masksRef.current.get(activeColorId);
+    if (!active) return;
+    const ids = regionMap.regionIds;
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i] !== rid) continue;
+      active[i] = 1;
+      for (const [id, m] of masksRef.current) {
+        if (id !== activeColorId && m[i]) m[i] = 0;
+      }
+    }
+    touchedRef.current.add(activeColorId);
+    for (const id of masksRef.current.keys()) {
+      if (id !== activeColorId) touchedRef.current.add(id);
+    }
+  }
+
   function handlePointerDown(e: PointerEvent<HTMLCanvasElement>) {
     const pt = getMaskCoords(e);
     if (!pt) return;
@@ -230,6 +294,16 @@ export function PaintCanvas({
     touchedRef.current.clear();
     onStrokeBegin();
 
+    if (tool === 'region') {
+      if (regionMap) {
+        const rid = regionAt(regionMap, pt.x, pt.y);
+        assignRegion(rid);
+      }
+      finishStroke();
+      drawingRef.current = false;
+      lastPxRef.current = null;
+      return;
+    }
     if (tool === 'fill') {
       floodFill(pt.x, pt.y);
       finishStroke();
@@ -243,9 +317,19 @@ export function PaintCanvas({
   }
 
   function handlePointerMove(e: PointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current) return;
     const pt = getMaskCoords(e);
     if (!pt) return;
+
+    if (tool === 'region' && !drawingRef.current) {
+      const rid = regionMap ? regionAt(regionMap, pt.x, pt.y) : -1;
+      if (rid !== hoverRegionRef.current) {
+        hoverRegionRef.current = rid;
+        redraw();
+      }
+      return;
+    }
+
+    if (!drawingRef.current) return;
     const last = lastPxRef.current;
     if (last) lineStamp(last.x, last.y, pt.x, pt.y);
     else stampAt(pt.x, pt.y);
@@ -258,6 +342,13 @@ export function PaintCanvas({
     drawingRef.current = false;
     lastPxRef.current = null;
     finishStroke();
+  }
+
+  function handlePointerLeave() {
+    if (hoverRegionRef.current !== -1) {
+      hoverRegionRef.current = -1;
+      redraw();
+    }
   }
 
   function finishStroke() {
@@ -278,9 +369,10 @@ export function PaintCanvas({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
         style={{
           imageRendering: 'pixelated',
-          cursor: tool === 'fill' ? 'crosshair' : 'cell',
+          cursor: tool === 'region' || tool === 'fill' ? 'crosshair' : 'cell',
           touchAction: 'none',
           background: '#fff',
           boxShadow: '0 2px 8px rgba(0,0,0,0.4)',

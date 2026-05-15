@@ -15,7 +15,9 @@ npm run typecheck
 
 1. Drop et billede (PNG/JPG). Det skaleres til ≤600px langs længste side.
 2. Vælg antal farver (1, 2 eller 3) og hex-værdi pr. plade via color pickerne.
-3. Mal pr. farve med pensel/visker/fyld-bucket. For 1-farve flow kommer der automatisk et mask fra Otsu-tærsklen — du kan korrigere ovenpå. For 2-3 farver maler du selv. En pixel kan kun tilhøre én farve; maling med en ny farve "stjæler" pixels fra de andre.
+3. Tildel områder til farver. To tilgange — kombinér efter behov:
+   - **Region-mode** (default): billedet posterizes til N niveauer (slider 2-8) og opdeles i connected components. Klik på et område for at tildele det den aktive farve. Konturerne tegnes som overlay på canvas så du kan se hvad der er klikbart.
+   - **Pensel/visker/fyld-bucket**: manuel maling oven på regionerne hvis du vil finjustere. En pixel kan kun tilhøre én farve; en ny tildeling "stjæler" pixels fra andre farver.
 4. Justér forenkling (Douglas-Peucker ε), ujævnhed (amplitude + frekvens) og min-areal med sliders. "Ny ujævnhed" genseeder noise-mønstret.
 5. SVG-preview opdateres live (debounced 250ms). Toggle engrave/cut pr. farve.
 6. **Eksportér SVG** → fil med viewBox i millimeter, en `<g>` pr. farve+rolle.
