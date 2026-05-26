@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type WheelEvent,
+} from 'react';
 import type { ColorId, ColorPlate, MaskDims } from '../types';
 import { paintRegionBoundaries, regionAt, type RegionMap } from '../utils/regions';
 
@@ -16,9 +24,10 @@ type Props = {
   onStrokeEnd: (updates: { id: ColorId; mask: Uint8Array }[]) => void;
 };
 
-const DISPLAY_MAX = 720;
 const SOURCE_DIM = 0.35;
 const PAINT_ALPHA = 0.65;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 24;
 
 export function PaintCanvas({
   source,
@@ -32,14 +41,47 @@ export function PaintCanvas({
   onStrokeEnd,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const masksRef = useRef<Map<ColorId, Uint8Array>>(new Map());
   const drawingRef = useRef(false);
   const lastPxRef = useRef<{ x: number; y: number } | null>(null);
   const touchedRef = useRef<Set<ColorId>>(new Set());
   const hoverRegionRef = useRef<number>(-1);
-
-  const scaleRef = useRef(1);
   const regionOverlayRef = useRef<ImageData | null>(null);
+
+  const panningRef = useRef(false);
+  const panStartRef = useRef({ mx: 0, my: 0, panX: 0, panY: 0 });
+
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const cr = e.contentRect;
+        setViewport((prev) => (prev.w === cr.width && prev.h === cr.height ? prev : { w: cr.width, h: cr.height }));
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const fitScale = useMemo(() => {
+    if (viewport.w === 0 || viewport.h === 0) return 1;
+    return Math.min(viewport.w / dims.w, viewport.h / dims.h);
+  }, [viewport, dims]);
+
+  const displayScale = fitScale * zoom;
+  const displayW = dims.w * displayScale;
+  const displayH = dims.h * displayScale;
+
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [dims, source]);
 
   useLayoutEffect(() => {
     masksRef.current = new Map(plates.map((p) => [p.id, new Uint8Array(p.mask)]));
@@ -65,12 +107,8 @@ export function PaintCanvas({
   function setupCanvasSize() {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const scale = Math.min(1, DISPLAY_MAX / Math.max(dims.w, dims.h));
-    scaleRef.current = scale;
     canvas.width = dims.w;
     canvas.height = dims.h;
-    canvas.style.width = `${Math.round(dims.w * scale)}px`;
-    canvas.style.height = `${Math.round(dims.h * scale)}px`;
   }
 
   function redraw() {
@@ -137,6 +175,7 @@ export function PaintCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
     const px = (e.clientX - rect.left) * (dims.w / rect.width);
     const py = (e.clientY - rect.top) * (dims.h / rect.height);
     return { x: px, y: py };
@@ -234,31 +273,19 @@ export function PaintCanvas({
       }
       if (x > 0) {
         const n = idx - 1;
-        if (matches(n)) {
-          visited[n] = 1;
-          stack.push(n);
-        }
+        if (matches(n)) { visited[n] = 1; stack.push(n); }
       }
       if (x < dims.w - 1) {
         const n = idx + 1;
-        if (matches(n)) {
-          visited[n] = 1;
-          stack.push(n);
-        }
+        if (matches(n)) { visited[n] = 1; stack.push(n); }
       }
       if (y > 0) {
         const n = idx - dims.w;
-        if (matches(n)) {
-          visited[n] = 1;
-          stack.push(n);
-        }
+        if (matches(n)) { visited[n] = 1; stack.push(n); }
       }
       if (y < dims.h - 1) {
         const n = idx + dims.w;
-        if (matches(n)) {
-          visited[n] = 1;
-          stack.push(n);
-        }
+        if (matches(n)) { visited[n] = 1; stack.push(n); }
       }
     }
 
@@ -286,7 +313,18 @@ export function PaintCanvas({
     }
   }
 
+  function isPanGesture(e: PointerEvent<HTMLCanvasElement>): boolean {
+    return e.button === 1 || e.button === 2 || e.shiftKey || e.altKey;
+  }
+
   function handlePointerDown(e: PointerEvent<HTMLCanvasElement>) {
+    if (isPanGesture(e)) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      panningRef.current = true;
+      panStartRef.current = { mx: e.clientX, my: e.clientY, panX: pan.x, panY: pan.y };
+      return;
+    }
+
     const pt = getMaskCoords(e);
     if (!pt) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -317,6 +355,13 @@ export function PaintCanvas({
   }
 
   function handlePointerMove(e: PointerEvent<HTMLCanvasElement>) {
+    if (panningRef.current) {
+      const dx = e.clientX - panStartRef.current.mx;
+      const dy = e.clientY - panStartRef.current.my;
+      setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
+      return;
+    }
+
     const pt = getMaskCoords(e);
     if (!pt) return;
 
@@ -338,6 +383,10 @@ export function PaintCanvas({
   }
 
   function handlePointerUp() {
+    if (panningRef.current) {
+      panningRef.current = false;
+      return;
+    }
     if (!drawingRef.current) return;
     drawingRef.current = false;
     lastPxRef.current = null;
@@ -361,25 +410,162 @@ export function PaintCanvas({
     if (updates.length > 0) onStrokeEnd(updates);
   }
 
+  function zoomAtPoint(viewportX: number, viewportY: number, factor: number) {
+    const newZoom = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const actualFactor = newZoom / zoom;
+    if (actualFactor === 1) return;
+    setZoom(newZoom);
+    setPan({
+      x: viewportX - actualFactor * (viewportX - pan.x),
+      y: viewportY - actualFactor * (viewportY - pan.y),
+    });
+  }
+
+  function handleWheel(e: WheelEvent<HTMLDivElement>) {
+    if (!viewportRef.current) return;
+    const rect = viewportRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    zoomAtPoint(mx, my, factor);
+  }
+
+  function zoomCenter(factor: number) {
+    if (!viewportRef.current) return;
+    const rect = viewportRef.current.getBoundingClientRect();
+    zoomAtPoint(rect.width / 2, rect.height / 2, factor);
+  }
+
+  function resetView() {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }
+
+  const baseLeft = (viewport.w - dims.w * fitScale) / 2;
+  const baseTop = (viewport.h - dims.h * fitScale) / 2;
+
+  const cursor = panningRef.current
+    ? 'grabbing'
+    : tool === 'region' || tool === 'fill'
+    ? 'crosshair'
+    : 'cell';
+
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', padding: 12, background: '#222' }}>
-      <canvas
-        ref={canvasRef}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onPointerLeave={handlePointerLeave}
-        style={{
-          imageRendering: 'pixelated',
-          cursor: tool === 'region' || tool === 'fill' ? 'crosshair' : 'cell',
-          touchAction: 'none',
-          background: '#fff',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-        }}
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        minHeight: 360,
+        background: '#222',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        ref={viewportRef}
+        onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}
+      >
+        <canvas
+          ref={canvasRef}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
+          style={{
+            position: 'absolute',
+            left: `${baseLeft + pan.x}px`,
+            top: `${baseTop + pan.y}px`,
+            width: `${displayW}px`,
+            height: `${displayH}px`,
+            imageRendering: 'pixelated',
+            cursor,
+            touchAction: 'none',
+            background: '#fff',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+          }}
+        />
+      </div>
+      <ZoomToolbar
+        zoom={zoom}
+        onZoomIn={() => zoomCenter(1.4)}
+        onZoomOut={() => zoomCenter(1 / 1.4)}
+        onReset={resetView}
       />
+      <HintBar />
     </div>
   );
+}
+
+function ZoomToolbar({
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onReset,
+}: {
+  zoom: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onReset: () => void;
+}) {
+  const btn: React.CSSProperties = {
+    width: 32,
+    height: 32,
+    border: 'none',
+    background: 'rgba(255,255,255,0.92)',
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontSize: 16,
+    fontWeight: 600,
+    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
+  return (
+    <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button onClick={onZoomIn} style={btn} title="Zoom ind">+</button>
+      <button onClick={onZoomOut} style={btn} title="Zoom ud">−</button>
+      <button onClick={onReset} style={{ ...btn, fontSize: 11 }} title="Tilpas til vindue">FIT</button>
+      <div
+        style={{
+          marginTop: 2,
+          padding: '2px 6px',
+          fontSize: 11,
+          background: 'rgba(0,0,0,0.55)',
+          color: '#fff',
+          borderRadius: 4,
+          textAlign: 'center',
+        }}
+      >
+        {Math.round(zoom * 100)}%
+      </div>
+    </div>
+  );
+}
+
+function HintBar() {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        bottom: 8,
+        left: 12,
+        fontSize: 11,
+        color: 'rgba(255,255,255,0.55)',
+        pointerEvents: 'none',
+        userSelect: 'none',
+      }}
+    >
+      Scrollhjul: zoom · Højreklik/Shift+træk: panorér
+    </div>
+  );
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function hexToRgb(hex: string): [number, number, number] {
